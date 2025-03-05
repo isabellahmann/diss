@@ -8,11 +8,14 @@
 
 ## currently adapted from Paula's code
 
+import sys
+sys.path.append('../')
+
 import torch
 import torch.nn as nn
 from enum import Enum
 
-from model.blocks import ResnetBlock, ResNetType
+from supn_base import ResnetBlock, ResNetType
 
 from supn_base.sparse_precision_cholesky import get_num_off_diag_weights
 from supn_base.cholespy_solver import get_num_off_diag_weights
@@ -428,6 +431,4 @@ class SUPNEncoderDecoder(nn.Module):
                                                  local_connection_dist=self.local_connection_dist[i]))
             i += 1
         
-        
-
         return results

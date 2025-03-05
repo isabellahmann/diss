@@ -81,8 +81,8 @@ class SupnMetricColour:
         self.eval_freq = 10
 
         self.model = SUPNEncoderDecoder(
-            in_channels=2, 
-            num_out_ch=2, 
+            in_channels=1, 
+            num_out_ch=1, 
             num_init_features=self.num_init_features, 
             num_log_diags=self.num_log_diags,
             num_local_connections=self.local_connection_dist,
