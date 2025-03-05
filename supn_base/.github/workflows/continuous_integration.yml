@@ -1,0 +1,89 @@
+name: supn_base
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths-ignore:
+      - '**/*.md'
+      - '.github/workflows/**'
+      - .gitignore
+  push:
+    branches:
+      - main
+
+jobs:
+  lint_with_ruff:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install UV
+        uses: astral-sh/setup-uv@v5
+      - name: Set up Python 3.12
+        run: uv python install 3.12
+      - name: Install ruff
+        run: pip install ruff
+      - name: Run Ruff on the code
+        run: ruff check --output-format=github . --fix --ignore F841
+
+  format_with_black:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install UV
+        uses: astral-sh/setup-uv@v5
+      - name: Set up Python 3.12
+        run: uv python install 3.12
+      - name: Install black
+        run: pip install black
+      - name: Format with Black
+        run: black --diff .
+
+  test_with_pytest:
+    if: false  
+    # disabling the pytesting for now -> as there are still open admin, dependency issues with cholespy
+    needs: [lint_with_ruff, format_with_black]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install UV
+        uses: astral-sh/setup-uv@v5
+      - name: Set up Python 3.12
+        run: uv python install 3.12
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update && sudo apt-get install -y cmake libsuitesparse-dev libeigen3-dev
+      - name: Install Python dependencies
+        run: |
+          pip install scikit-build scikit-sparse nanobind
+      - name: Sync dependencies
+        run: uv sync --all-extras --dev
+      - name: Set up SSH key for GitHub Actions
+        uses: webfactory/ssh-agent@v0.5.3
+        with:
+          ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}  # This accesses your private key
+      - name: Install supn_cholespy
+        run: |
+          git clone --recursive git@github.com:lopasole02/cholespy_copy.git
+          cd cholespy_copy
+          git submodule update --init --recursive
+          cd ext/nanobind
+          git checkout method_bindings
+          cd ../..
+          pip install -e .
+      - name: Type check with mypy (codebase)
+        if: ${{ github.event_name == 'push' }}
+        run: uv run mypy supn_base
+      - name: Type check with mypy (tests)
+        if: ${{ github.event_name == 'push' }}
+        run: uv run mypy tests
+      - name: Run tests with pytest
+        run: |
+          echo "::group::Running Pytest for tests"
+          uv run pytest tests/tests.py -vv --durations=10 --cov=supn_base --cov-report=term-missing --cov-fail-under=80
+          echo "::endgroup::"
+      - name: Run multichannel tests with pytest
+        run: |
+          echo "::group::Running Pytest for multichannel integration tests"
+          uv run pytest tests/test_multichannel_2d.py -vv --durations=10 --cov=supn_base --cov-report=term-missing --cov-fail-under=80
+          echo "::endgroup::"
