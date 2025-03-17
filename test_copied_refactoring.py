@@ -621,8 +621,126 @@ class SupnBRATS:
 
                     print(f"Combined image saved to {image_path}")
 
+    # plt.use('Agg')
+    def sample_validate_colour(self, nr_of_samples=10, log_wandb=False, train_set=False):
+        import matplotlib.pyplot as plt
+        from PIL import Image
+        import torch
+
+                # perceptual_model = SupnBRATS()
+        # print('loadeed model')
+        checkpoint_path = 'checkpoints/supn_model_ensebmle/brats5_lr1e-06_paramschol.pth'
+        # 'checkpoints/supn_model/brats1_lr0.0001_paramsnomean.pth'
+        self.load_model(checkpoint_path)
+        self.model.eval()
+
+
+        # def normalize(image_tensor):
+        #         """Normalize the image tensor."""
+        #         normalize = transforms.Normalize(mean=(0.5,), std=(0.5,))
+        #         return normalize(image_tensor)
+
+        with torch.no_grad():
+            for batch in self.train_dataloader:
+                flair_images = batch["flair_image"]  # Flair images for the batch
+                masks = batch["masks"]  # Masks are the ensemble predictions (e.g., 3 masks per flair image)
+
+                # print(f"Flair images shape: {flair_images.shape}")
+                # print(f"Masks shape: {masks.shape}")
+
+                for idx, flair_image in enumerate(flair_images):  # Loop through each flair image
+                    flair_image = flair_image.unsqueeze(0).to(self.device)  # Add batch dimension and move to device
+                    supn_outputs = self.run_model(flair_image)
+                    # supn_outputs = torch.sigmoid(supn_outputs)
+                    mean  = torch.sigmoid(supn_outputs[0].mean)
+
+                    flair_image = flair_images[0]  # (channels, height, width)
+
+
+
+
+                    print(flair_image.size)
+                    plt.figure(figsize=(6, 6))
+                    plt.imshow(flair_image[0], cmap='gray') 
+                    plt.axis('off')
+                    plt.savefig('original_image.png')
+
+
+
+
+                    # img1_tensor, c = preprocess_image(image, size=perceptual_model.image_size)
+                    # print(img1_tensor.shape,img1_tensor.min().item(),img1_tensor.max().item())
+                    # print(c.shape,c.min().item(),c.max().item())
+                    # c = normalize(c)
+                    # model_outputs = self.model.run_model(image)  # Get model outputs
+                    # supn_list = model_outputs[0]
+
+                    rows = nr_of_samples  # One row per sample
+                    cols = 1  # One column per resolution level
+
+                    plt.figure(figsize=(cols * 3, rows * 3))
+
+                    # supn_dist = supn_list
+                    supn_dist = supn_outputs[0]
+
+                    # Sample from the distribution
+                    sample = supn_dist.sample(num_samples=nr_of_samples).squeeze(1)
+                    print("sample size", sample.shape)
+                    print("sample min max", sample[0, 0, :, :].min(), sample[0, 0, :, :].max())
+                    print("mean", mean.shape)
+                    print("mean min max", mean.min(), mean.max())
+                    sample_np = sample.detach().cpu().numpy()
+
+                    fig1, axes = plt.subplots(2, 2, figsize=(10, 10))
+                    vmin, vmax = -1, 1  # Set consistent color scaling limits
+                    # mean = supn_dist.mean.detach().cpu()[:,0,:,:]
+                    print(mean.shape,mean.min().item(),mean.max().item())
+                    #print(image.min().item())
+                    axes[0, 0].imshow(flair_image.squeeze(), cmap='gray')
+                    axes[0, 0].set_title('Original Image')
+                    axes[0, 0].axis('off')
+
+                    # print(supn_dist.mean.detach().cpu().squeeze().shape)
+                    # print(supn_dist.mean.detach().cpu().squeeze()[0].shape)
+
+                    # mean  = torch.sigmoid(supn_dist.mean)
+
+
+                    # axes[0, 1].imshow(supn_dist.mean.detach().cpu().squeeze()[0], cmap='gray')
+                    axes[0, 1].imshow(mean.detach().cpu().squeeze(), cmap='gray')
+                    axes[0, 1].set_title('Mean Reconstruction')
+                    axes[0, 1].axis('off')
+
+                    sample = torch.sigmoid(torch.from_numpy(sample_np[0, 0, :, :]))
+
+                    # axes[1, 0].imshow(-supn_dist.mean.detach().cpu().squeeze()[0] + sample_np[0, 0, :, :], cmap='gray')
+                    axes[1, 0].imshow(-mean.detach().cpu().squeeze() + sample.detach().cpu().squeeze(), cmap='gray')
+                    axes[1, 0].set_title('Sampled Image (No Mean)')
+                    axes[1, 0].axis('off')
+
+                    axes[1, 1].imshow(sample.detach().cpu().squeeze(), cmap='gray')
+                    axes[1, 1].set_title('Mean + Sample')
+                    axes[1, 1].axis('off')
+
+                    plt.tight_layout()
+                    plt.show()
+
+                    if log_wandb:
+                        if train_set:
+                            wandb.log({'Train_Recon': wandb.Image(fig1)})
+                        else:
+                            wandb.log({'Test_Recon': wandb.Image(fig1)})
+
+                    plt.tight_layout()
+                    plt.savefig(f'colour_sample_{idx}.png')
+
+
+    # sample_validate_colour("data/flair_images/patient_0_4.png")
+
+
 
 if __name__ == '__main__':
     trainer = SupnBRATS()
     # trainer.train()
-    trainer.test()
+    # trainer.test()
+    trainer.sample_validate_colour()
