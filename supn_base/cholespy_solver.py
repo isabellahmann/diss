@@ -4,11 +4,11 @@ import numpy as np
 import torch
 from torch.autograd import Function
 from torch.nn import functional as F
-from supn_data import SUPNData, convert_log_to_diag_weights, get_num_off_diag_weights
+from supn_base.supn_data import SUPNData, convert_log_to_diag_weights, get_num_off_diag_weights
 
 from cholespy import SupnCholeskySolverF, SupnCholeskySolverD, MatrixType, inspect
 
-from sparse_precision_cholesky import build_off_diag_filters, apply_off_diag_weights_offset, get_prec_chol_as_sparse_tensor
+from supn_base.sparse_precision_cholesky import build_off_diag_filters, apply_off_diag_weights_offset, get_prec_chol_as_sparse_tensor
 # import torch_sparse_solve as tss
 # import scipy.sparse as sparse
 

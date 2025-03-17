@@ -9,6 +9,10 @@ __pycache__/
 # Ignore specific folders
 logs/
 data/
+pretrained_models/
+checkpoints/
+output_images/
+wandb/
 
 # Distribution / packaging
 .Python

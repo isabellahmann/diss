@@ -1,5 +1,5 @@
 import torch
-from supn_data import SUPNData
+from supn_base.supn_data import SUPNData
 
 class SUPNPreconditionerBase(torch.nn.Module):
     # This base class is used to define the interface for the SUPN preconditioner classes

@@ -12,7 +12,7 @@ from torch.nn import functional as F
 import scipy.sparse as sparse
 from typing import Tuple
 
-from supn_data import convert_log_to_diag_weights, get_num_off_diag_weights, get_num_cross_channel_weights
+from supn_base.supn_data import convert_log_to_diag_weights, get_num_off_diag_weights, get_num_cross_channel_weights
 
 
 def build_off_diag_filters(local_connection_dist, use_transpose=True, device=None, dtype=torch.float, use_3d=False):

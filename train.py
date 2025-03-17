@@ -10,6 +10,9 @@ The code below configures and trains a SUPN model for the colour part of the met
 
 ## adapted from paula right now
 
+import sys
+sys.path.append('../')
+
 import os
 import torch
 print(torch.cuda.is_available())

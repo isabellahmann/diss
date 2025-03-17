@@ -1,12 +1,234 @@
+# Author: Ivor Simpson, University of Sussex (i.simpson@sussex.ac.uk)
+# Purpose: Blocks of networks
+
+from models.model import SUPNEncoderDecoder
+from supn_base.supn_data import SUPNData
+from supn_base.supn_distribution import SUPN
+
+import torch.nn as nn
+from enum import Enum
+
+import os
+import random
+from PIL import Image
 import torch
-from supn_test import SUPNEncoderDecoder  # Import your model class
+from torch.utils.data import Dataset
+from torchvision import transforms
+
+import sys
 import os
-from supn_test import BRATSDataset, get_data_loaders_BRATS
-import os
+
+# Add the 'models' directory to sys.path
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), 'models')))
+
+# Now import model
+from models.model import SUPNEncoderDecoder
+
+
+class BRATSDataset(Dataset):
+    def __init__(self, flair_dir='dataset/2afc', masks_dir='dataset/2afc', dataset_type="train", img_size=(256, 256), num_masks=5, split_ratio=0.8):
+        """
+        FLAIR dataset with corresponding masks from an ensemble.
+        The dataset will load both FLAIR images and 5 masks corresponding to each FLAIR image.
+
+        :param flair_dir: Root directory containing FLAIR images.
+        :param masks_dir: Root directory containing mask images.
+        :param dataset_type: 'train' or 'val' to specify which split to use.
+        :param img_size: Target size of the images.
+        :param num_masks: Number of masks to load per FLAIR image.
+        :param split_ratio: Ratio to split dataset into train and validation (e.g., 0.8 means 80% train, 20% validation).
+        """
+        super(BRATSDataset, self).__init__()
+        self.flair_dir = flair_dir
+        self.masks_dir = masks_dir
+        self.img_size = img_size
+        self.num_masks = num_masks
+        self.split_ratio = split_ratio
+
+        # Get list of all FLAIR images
+        self.flair_filenames = self._get_image_filenames(self.flair_dir)
+
+        # Split into train and validation based on split_ratio
+        num_train = int(len(self.flair_filenames) * self.split_ratio)
+        random.shuffle(self.flair_filenames)
+
+        # Assign images to train/val based on the split ratio
+        if dataset_type == "train":
+            self.flair_filenames = self.flair_filenames[:num_train]
+        elif dataset_type == "val":
+            self.flair_filenames = self.flair_filenames[num_train:]
+        else:
+            raise ValueError("dataset_type should be either 'train' or 'val'.")
+
+    def _get_image_filenames(self, directory):
+        """
+        Get all image filenames (excluding directories) from the given folder.
+        """
+        return [os.path.join(directory, f) for f in os.listdir(directory) if f.lower().endswith(('.png', '.jpg', '.jpeg'))]
+
+    def _get_mask_filenames(self, flair_filename):
+        """
+        For each FLAIR image, get corresponding mask filenames.
+        Assumes the masks are named based on the FLAIR image with a mask index (e.g., flair_image_1_mask_1.png).
+        """
+        base_name = os.path.splitext(os.path.basename(flair_filename))[0]
+        mask_filenames = []
+        # for i in range(1, self.num_masks + 1):
+        for i in range(1, 5):
+            mask_filename = os.path.join(self.masks_dir, f"{base_name}_ensemble_{i}.png")
+            if not mask_filename.endswith("_ensemble_2.png"):  # Exclude _ensemble_2
+                mask_filenames.append(mask_filename)
+        return mask_filenames
+
+        # FileNotFoundError: [Errno 2] No such file or directory: '/content/drive/MyDrive/Diss/ensemble_predictions/patient_80_9_mask_1.png'
+
+
+    def __len__(self):
+        return len(self.flair_filenames)
+
+    def __getitem__(self, index):
+        """
+        Load FLAIR image and corresponding masks.
+        """
+        # Load FLAIR image
+        flair_image_path = self.flair_filenames[index]
+        flair_image = Image.open(flair_image_path).convert("L")
+
+        # Load masks corresponding to this FLAIR image
+        mask_filenames = self._get_mask_filenames(flair_image_path)
+        masks = [Image.open(mask_filename).convert("L") for mask_filename in mask_filenames]
+
+        # Resize FLAIR image and masks to target size
+        # flair_image = flair_image.resize(self.img_size, Image.BICUBIC)
+        # masks = [mask.resize(self.img_size, Image.NEAREST) for mask in masks]
+
+        # # Convert images to tensors
+        flair_image = transforms.ToTensor()(flair_image)
+        masks = [transforms.ToTensor()(mask) for mask in masks]
+
+        # Apply normalization to the FLAIR image
+        # normalize = transforms.Normalize(mean=(0.5, 0.5, 0.5), std=(0.5, 0.5, 0.5))
+        # flair_image = normalize(flair_image)
+
+        # Return FLAIR image and masks as a dictionary
+        return {
+            "flair_image": flair_image,
+            "masks": torch.stack(masks)  # Stack the masks along the first dimension
+        }
+
+from torch.utils.data import Dataset, DataLoader, SubsetRandomSampler
+
+def get_data_loaders_BRATS(flair_dir='dataset/2afc', masks_dir = '', batchsize=64, img_size=(64, 64), train_size=None, val_size=None, num_scales=4, num_levels=5, colour = False):
+    # Initialize train and validation datasets
+    train_dataset = BRATSDataset(flair_dir=flair_dir,masks_dir=masks_dir, dataset_type="train", img_size=img_size)
+    val_dataset = BRATSDataset(flair_dir=flair_dir,masks_dir=masks_dir, dataset_type="val", img_size=img_size)
+
+    # Determine sizes for training and validation datasets
+    train_size = len(train_dataset) if not train_size else train_size
+    val_size = len(val_dataset) if not val_size else val_size
+
+    # Generate list of indices
+    train_indices = list(range(len(train_dataset)))
+    val_indices = list(range(len(val_dataset)))
+
+    # Create samplers for each split
+    train_sampler = SubsetRandomSampler(train_indices[:train_size])
+    val_sampler = SubsetRandomSampler(val_indices[:val_size])
+
+    # Create data loaders using samplers
+    train_loader = DataLoader(train_dataset, batch_size=batchsize, sampler=train_sampler, num_workers=4, pin_memory=True, drop_last=True)
+    val_loader = DataLoader(val_dataset, batch_size=batchsize, sampler=val_sampler, num_workers=4, pin_memory=True, drop_last=True)
+
+    return train_loader, val_loader
+
+import matplotlib.pyplot as plt
 import torch
 import numpy as np
-import matplotlib.pyplot as plt
-from PIL import Image
+
+def visualize_flair_and_masks(data_loader, num_samples=3):
+    """
+    Visualizes FLAIR images and their corresponding masks from the DataLoader.
+
+    :param data_loader: The DataLoader to sample data from.
+    :param num_samples: Number of samples to display.
+    """
+    # Iterate through the data loader
+    for i, batch in enumerate(data_loader):
+        # Get the flair images and masks from the batch
+        flair_images = batch['flair_image']  # Shape: [batch_size, 1, height, width] for grayscale
+        masks = batch['masks']  # Shape: [batch_size, num_masks, 1, height, width]
+
+        # Display a few samples (num_samples)
+        for j in range(min(num_samples, flair_images.size(0))):
+            flair_image = flair_images[j].cpu().numpy()  # Convert to numpy for plotting
+            mask = masks[j].squeeze(1).cpu().numpy()  # Remove the singleton dimension (1) for masks
+
+            # print(f"Sample {j + 1} - FLAIR Image Shape: {flair_image.shape}")
+            # print(f"Sample {j + 1} - Mask Shape: {mask.shape}")
+
+            # Plot the flair image and masks
+            fig, axes = plt.subplots(1, len(mask) + 1, figsize=(12, 5))
+
+            # Show the flair image (convert to [0, 1] range for visualization)
+            axes[0].imshow(flair_image[0], cmap='gray')  # Show as grayscale (only one channel)
+            axes[0].set_title("FLAIR Image")
+            axes[0].axis('off')
+
+            # Show the masks
+            for m in range(mask.shape[0]):
+                axes[m + 1].imshow(mask[m], cmap='gray')  # Show each mask in grayscale
+                axes[m + 1].set_title(f"Mask {m + 1}")
+                axes[m + 1].axis('off')
+
+            plt.tight_layout()
+            plt.show()
+
+        # If we have already displayed the desired number of samples, stop iterating
+        if i >= num_samples // flair_images.size(0):
+            break
+
+
+current_dir = os.getcwd()  # Get current working directory
+flair_path = os.path.join(current_dir, "data/flair_images")
+ensemble_path = os.path.join(current_dir, "data/ensemble_predictions")
+
+# Example usage
+train_loader, val_loader = get_data_loaders_BRATS(
+    flair_dir=flair_path,
+    masks_dir=ensemble_path,
+    batchsize=2, img_size=(64, 64)
+)
+visualize_flair_and_masks(train_loader, num_samples=3)
+
+
+
+
+'''
+Training setup for colour(2chrominance channels) metrics:
+- model takes 2 channel images as input.
+- apply color-based transformations and spatial transformations.
+- Upthe image size is a lower resolution(64x64) then the y-channels
+- currently using a sparsity distance of 2; as well as looking at cross-channel correlations between cr and cb
+
+The code below configures and trains a SUPN model for the colour part of the metric.
+'''
+
+## adapted from paula right now
+
+import os
+import torch
+print(torch.cuda.is_available())
+import torch.optim as optim
+import torch.nn.functional as F
+import torch.nn as nn
+
+# from data_loader import get_data_loaders_BAAPS
+from enum import Enum
+import configparser
+import wandb
+import pdb
+
+wandb.login()
 
 class SupnBRATS:
     def __init__(self):
@@ -37,8 +259,8 @@ class SupnBRATS:
         self.freeze_mean_decoder = True  # Freeze the mean decoder by default
 
         # File paths for saving and loading models
-        self.supn_model_load_path = 'checkpoints/supn_model/brats1_lr0.0001_paramsnomean.pth'  # Path to load model
-        self.supn_model_save_path = 'checkpoints/supn_model'  # Path to save the model
+        self.supn_model_load_path = 'checkpoints/supn_model/colour1_lr0.0001_paramsnomean.pth'  # Path to load model
+        self.supn_model_save_path = 'checkpoints/supn_model_ensebmle'  # Path to save the model
 
         # Optimizer settings
         self.optimizer_type = 'AdamW'  # Optimizer type set to AdamW
@@ -90,8 +312,8 @@ class SupnBRATS:
             }
         ]
 
-        # if self.log_wandb:
-        #     wandb.init(project="SUPNBraTs")
+        if self.log_wandb:
+            wandb.init(project="SUPNBraTs")
 
 
         self.step = 0
@@ -120,9 +342,6 @@ class SupnBRATS:
 
 
     def load_data(self):
-        current_dir = os.getcwd()  # Get current working directory
-        flair_path = os.path.join(current_dir, "data/flair_images")
-        ensemble_path = os.path.join(current_dir, "data/ensemble_predictions")
         loader_func = eval(self.data_loader_func)
         self.train_dataloader, self.val_dataloader = loader_func(
             flair_path,
@@ -194,13 +413,22 @@ class SupnBRATS:
         # print(f"target shape: {target.shape}")
         mse_loss = mse_loss_fn(supn_data.supn_data.mean.squeeze(0), target.to(self.device))
         mse_loss = mse_loss * weighting_factor
+
+        # trying out hybrid loss
+        bce_loss_fn = nn.BCEWithLogitsLoss()
+        bce_loss = bce_loss_fn(supn_data.supn_data.mean.squeeze(0), target.to(self.device))
+
+        combined_loss = 0.5*mse_loss + 0.5*bce_loss
+
+        # before instead of combined it was just mse
+  
         assert isinstance(mse_loss, torch.Tensor)
 
         if only_mean:
-            return {'mse_loss': mse_loss}
+            return {'mse_loss': combined_loss}
         else:
             log_prob = -supn_data.log_prob(target.to(self.device)) * weighting_factor
-            return {'mse_loss': mse_loss, 'log_likelihood_loss': log_prob.mean()}
+            return {'mse_loss': combined_loss, 'log_likelihood_loss': log_prob.mean()}
 
 
     def run_model(self, image):
@@ -226,11 +454,11 @@ class SupnBRATS:
                 self.optimizer.zero_grad()
                 #print('accumulated',accumulated_loss)
 
-                # if self.log_wandb:
-                #     wandb.log({
-                #         f'{loss_type}': accumulated_loss,
-                #         'Step': self.step
-                #     })
+                if self.log_wandb:
+                    wandb.log({
+                        f'{loss_type}': accumulated_loss,
+                        'Step': self.step
+                    })
 
 
                 accumulated_loss = 0.0
@@ -273,20 +501,16 @@ class SupnBRATS:
 
         return loss_dict
 
-
-
-
-
     def validate(self):
         self.model.eval()
         with torch.no_grad():
             for batch in self.val_dataloader:
                 loss_dict = self.run_batch(batch, loss_type='log_likelihood_loss')
-                # if self.log_wandb:
-                #     if 'mse_loss' in loss_dict:
-                #         wandb.log({'Validation/mse_loss': loss_dict.get('mse_loss').item() , 'Step': self.step})
-                #     if 'log_likelihood_loss' in loss_dict:
-                #         wandb.log({'Validation/log_likelihood_loss': loss_dict.get('log_likelihood_loss'), 'Step': self.step})
+                if self.log_wandb:
+                    if 'mse_loss' in loss_dict:
+                        wandb.log({'Validation/mse_loss': loss_dict.get('mse_loss').item() , 'Step': self.step})
+                    if 'log_likelihood_loss' in loss_dict:
+                        wandb.log({'Validation/log_likelihood_loss': loss_dict.get('log_likelihood_loss'), 'Step': self.step})
 
     def set_optimizer(self, learning_rate):
         if self.optimizer_type == 'AdamW':
@@ -298,8 +522,21 @@ class SupnBRATS:
 
 
     def load_model(self, path):
-        self.model.load_state_dict(torch.load(path,map_location=self.device))
+        self.model.load_state_dict(torch.load(path))
 
+
+    def train(self):
+        for schedule_idx, schedule in enumerate(self.train_schedules):
+            self.set_optimizer(schedule['learning_rate'])
+            self.freeze_parameters(schedule['parameters'])
+            print(f"Training with parameters: {schedule['parameters']}")
+            for epoch in range(schedule['num_epochs']):
+                self.run_epoch(schedule['loss_type'])
+                # self.validate()
+                print(epoch)
+                stage_name = f"brats{schedule_idx}_lr{schedule['learning_rate']}_params{schedule['parameters']}"
+                self.save_model(stage_name)
+    
     def test(self):
         checkpoint_path = 'checkpoints/supn_model_ensebmle/brats5_lr1e-06_paramschol.pth'
         # 'checkpoints/supn_model/brats1_lr0.0001_paramsnomean.pth'
@@ -317,7 +554,7 @@ class SupnBRATS:
                     flair_image = flair_image.unsqueeze(0).to(self.device)  # Add batch dimension and move to device
                     supn_outputs = self.run_model(flair_image)
                     # supn_outputs = torch.sigmoid(supn_outputs)
-                    mean  = torch.sigmoid(supn_outputs[0].supn_data.mean)
+                    mean  = torch.sigmoid(supn_outputs[0].mean)
 
                     # # Normalize the predicted mean and masks if necessary
                     # def normalize_image(image):
@@ -374,7 +611,7 @@ class SupnBRATS:
                         os.makedirs(output_folder)
 
                     # Save the combined image
-                    image_path = os.path.join(output_folder, f"flair_mask_predicted_mean_ensem_{idx}.png")
+                    image_path = os.path.join(output_folder, f"flair_mask_predicted_mean_ensemb_{idx}.png")
                     plt.savefig(image_path, bbox_inches='tight', pad_inches=0.1)
 
                     # Optional: Close the plot to free memory
@@ -384,9 +621,8 @@ class SupnBRATS:
 
                     print(f"Combined image saved to {image_path}")
 
-                        
-
 
 if __name__ == '__main__':
     trainer = SupnBRATS()
+    # trainer.train()
     trainer.test()

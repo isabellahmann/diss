@@ -3,11 +3,11 @@ sys.path.append('../')
 
 import torch
 from torch.distributions import Distribution
-from sparse_precision_cholesky import get_prec_chol_as_sparse_tensor, \
+from supn_base.sparse_precision_cholesky import get_prec_chol_as_sparse_tensor, \
     log_prob_from_sparse_chol_prec
     
-# from cholespy_solver import SUPNSolver, sparse_chol_linsolve, sample_zero_mean
-from supn_data import SUPNData, get_num_off_diag_weights
+from supn_base.cholespy_solver import SUPNSolver, sparse_chol_linsolve, sample_zero_mean
+from supn_base.supn_data import SUPNData, get_num_off_diag_weights
 
 class SUPN(Distribution):
     """
@@ -17,16 +17,16 @@ class SUPN(Distribution):
     def __init__(self, 
                  supn_data: SUPNData):
         self.supn_data = supn_data
-        # self.supn_solver = SUPNSolver(supn_data)
+        self.supn_solver = SUPNSolver(supn_data)
         super(SUPN, self).__init__()
 
 
-    # def sample(self, 
-    #            num_samples: int = 1) -> torch.Tensor:
+    def sample(self, 
+               num_samples: int = 1) -> torch.Tensor:
 
-    #     zero_mean_sample = sample_zero_mean(self.supn_data, num_samples, self.supn_solver)
+        zero_mean_sample = sample_zero_mean(self.supn_data, num_samples, self.supn_solver)
 
-    #     return  zero_mean_sample + self.mean
+        return  zero_mean_sample + self.mean
 
     def log_prob(self, data: torch.tensor, stop_grads: bool = False) -> torch.Tensor:
         """

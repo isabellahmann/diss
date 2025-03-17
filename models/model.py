@@ -15,7 +15,7 @@ import torch
 import torch.nn as nn
 from enum import Enum
 
-from supn_base import ResnetBlock, ResNetType
+from models.supn_blocks import ResnetBlock, ResNetType
 
 from supn_base.sparse_precision_cholesky import get_num_off_diag_weights
 from supn_base.cholespy_solver import get_num_off_diag_weights
@@ -425,10 +425,10 @@ class SUPNEncoderDecoder(nn.Module):
         for mean, supn in zip(mean_decodings,supn_decodings):
             log_diag, off_diag, cross_ch = supn
             ## currently I dont have access to the supn cholespy so solver does not work
-            # results.append(torch.distributions.SUPN(SUPNData(mean = mean, log_diag=log_diag, off_diag=off_diag, cross_ch=cross_ch,
-            #                                      local_connection_dist=self.local_connection_dist[i])))
-            results.append(SUPNData(mean = mean, log_diag=log_diag, off_diag=off_diag, cross_ch=cross_ch,
-                                                 local_connection_dist=self.local_connection_dist[i]))
+            results.append(torch.distributions.SUPN(SUPNData(mean = mean, log_diag=log_diag, off_diag=off_diag, cross_ch=cross_ch,
+                                                 local_connection_dist=self.local_connection_dist[i])))
+            # results.append(SUPNData(mean = mean, log_diag=log_diag, off_diag=off_diag, cross_ch=cross_ch,
+            #                                      local_connection_dist=self.local_connection_dist[i]))
             i += 1
         
         return results
