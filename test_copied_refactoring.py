@@ -685,11 +685,14 @@ class SupnBRATS:
 
                     # Sample from the distribution
                     sample = supn_dist.sample(num_samples=nr_of_samples).squeeze(1)
+                    sample_np = sample.detach().cpu().numpy()
+
+                    sample = torch.sigmoid(torch.from_numpy(sample_np[0, 0, :, :]))
+
                     print("sample size", sample.shape)
-                    print("sample min max", sample[0, 0, :, :].min(), sample[0, 0, :, :].max())
+                    print("sample min max", sample.min(), sample.max())
                     print("mean", mean.shape)
                     print("mean min max", mean.min(), mean.max())
-                    sample_np = sample.detach().cpu().numpy()
 
                     fig1, axes = plt.subplots(2, 2, figsize=(10, 10))
                     vmin, vmax = -1, 1  # Set consistent color scaling limits
@@ -711,7 +714,6 @@ class SupnBRATS:
                     axes[0, 1].set_title('Mean Reconstruction')
                     axes[0, 1].axis('off')
 
-                    sample = torch.sigmoid(torch.from_numpy(sample_np[0, 0, :, :]))
 
                     # axes[1, 0].imshow(-supn_dist.mean.detach().cpu().squeeze()[0] + sample_np[0, 0, :, :], cmap='gray')
                     axes[1, 0].imshow(-mean.detach().cpu().squeeze() + sample.detach().cpu().squeeze(), cmap='gray')

@@ -13,6 +13,8 @@ pretrained_models/
 checkpoints/
 output_images/
 wandb/
+mapping/
+notebooks/ensemble_models
 
 # Distribution / packaging
 .Python
