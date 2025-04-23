@@ -1,5 +1,6 @@
 # diss
 
+# run supn_cholespy_image docker image
 
 # installs
-pip install matplotlib wandb
+pip install wandb matplotlib opencv-python scikit-image

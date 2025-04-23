@@ -1,28 +1,23 @@
 # Author: Ivor Simpson, University of Sussex (i.simpson@sussex.ac.uk)
 # Purpose: Blocks of networks
 
-import os
-import random
-import sys
-from enum import Enum
-from configparser import ConfigParser  # renamed from configparser for clarity
-
-import numpy as np
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
-import torch.optim as optim
-import matplotlib.pyplot as plt
-from PIL import Image
-from torch.utils.data import Dataset, DataLoader, SubsetRandomSampler
-from torchvision import transforms
-import wandb
-
 from models.model import SUPNEncoderDecoder
-from notebooks.data_loader_test import get_ensemble_all_data_loader, get_ensemble_data_loader
 from supn_base.supn_data import SUPNData
 from supn_base.supn_distribution import SUPN
+from notebooks.data_loader_test import get_ensemble_all_data_loader, get_ensemble_data_loader
 
+import torch.nn as nn
+from enum import Enum
+
+import os
+import random
+from PIL import Image
+import torch
+from torch.utils.data import Dataset
+from torchvision import transforms
+
+import sys
+import os
 
 # Add the 'models' directory to sys.path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), 'models')))
@@ -30,6 +25,127 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), 'models'
 # Now import model
 from models.model import SUPNEncoderDecoder
 
+
+class BRATSDataset(Dataset):
+    def __init__(self, flair_dir='dataset/2afc', masks_dir='dataset/2afc', dataset_type="train", img_size=(256, 256), num_masks=5, split_ratio=0.8):
+        """
+        FLAIR dataset with corresponding masks from an ensemble.
+        The dataset will load both FLAIR images and 5 masks corresponding to each FLAIR image.
+
+        :param flair_dir: Root directory containing FLAIR images.
+        :param masks_dir: Root directory containing mask images.
+        :param dataset_type: 'train' or 'val' to specify which split to use.
+        :param img_size: Target size of the images.
+        :param num_masks: Number of masks to load per FLAIR image.
+        :param split_ratio: Ratio to split dataset into train and validation (e.g., 0.8 means 80% train, 20% validation).
+        """
+        super(BRATSDataset, self).__init__()
+        self.flair_dir = flair_dir
+        self.masks_dir = masks_dir
+        self.img_size = img_size
+        self.num_masks = num_masks
+        self.split_ratio = split_ratio
+
+        # Get list of all FLAIR images
+        self.flair_filenames = self._get_image_filenames(self.flair_dir)
+
+        # Split into train and validation based on split_ratio
+        num_train = int(len(self.flair_filenames) * self.split_ratio)
+        random.shuffle(self.flair_filenames)
+
+        # Assign images to train/val based on the split ratio
+        if dataset_type == "train":
+            self.flair_filenames = self.flair_filenames[:num_train]
+        elif dataset_type == "val":
+            self.flair_filenames = self.flair_filenames[num_train:]
+        else:
+            raise ValueError("dataset_type should be either 'train' or 'val'.")
+
+    def _get_image_filenames(self, directory):
+        """
+        Get all image filenames (excluding directories) from the given folder.
+        """
+        return [os.path.join(directory, f) for f in os.listdir(directory) if f.lower().endswith(('.png', '.jpg', '.jpeg'))]
+
+    def _get_mask_filenames(self, flair_filename):
+        """
+        For each FLAIR image, get corresponding mask filenames.
+        Assumes the masks are named based on the FLAIR image with a mask index (e.g., flair_image_1_mask_1.png).
+        """
+        base_name = os.path.splitext(os.path.basename(flair_filename))[0]
+        mask_filenames = []
+        # for i in range(1, self.num_masks + 1):
+        for i in range(1, 5):
+            mask_filename = os.path.join(self.masks_dir, f"{base_name}_ensemble_{i}.png")
+            if not mask_filename.endswith("_ensemble_2.png"):  # Exclude _ensemble_2
+                mask_filenames.append(mask_filename)
+        return mask_filenames
+
+        # FileNotFoundError: [Errno 2] No such file or directory: '/content/drive/MyDrive/Diss/ensemble_predictions/patient_80_9_mask_1.png'
+
+
+    def __len__(self):
+        return len(self.flair_filenames)
+
+    def __getitem__(self, index):
+        """
+        Load FLAIR image and corresponding masks.
+        """
+        # Load FLAIR image
+        flair_image_path = self.flair_filenames[index]
+        flair_image = Image.open(flair_image_path).convert("L")
+
+        # Load masks corresponding to this FLAIR image
+        mask_filenames = self._get_mask_filenames(flair_image_path)
+        masks = [Image.open(mask_filename).convert("L") for mask_filename in mask_filenames]
+
+        # Resize FLAIR image and masks to target size
+        # flair_image = flair_image.resize(self.img_size, Image.BICUBIC)
+        # masks = [mask.resize(self.img_size, Image.NEAREST) for mask in masks]
+
+        # # Convert images to tensors
+        flair_image = transforms.ToTensor()(flair_image)
+        masks = [transforms.ToTensor()(mask) for mask in masks]
+
+        # Apply normalization to the FLAIR image
+        # normalize = transforms.Normalize(mean=(0.5), std=(0.5))
+        # flair_image = normalize(flair_image)
+
+        # Return FLAIR image and masks as a dictionary
+        return {
+            "modality_data": flair_image,
+            "selected_pred": torch.stack(masks)  # Stack the masks along the first dimension
+        }
+
+from torch.utils.data import Dataset, DataLoader, SubsetRandomSampler
+
+def get_data_loaders_BRATS(flair_dir='dataset/2afc', masks_dir = '', batchsize=64, img_size=(64, 64), train_size=None, val_size=None, num_scales=4, num_levels=5, colour = False):
+    # Initialize train and validation datasets
+    train_dataset = BRATSDataset(flair_dir=flair_dir,masks_dir=masks_dir, dataset_type="train", img_size=img_size)
+    val_dataset = BRATSDataset(flair_dir=flair_dir,masks_dir=masks_dir, dataset_type="val", img_size=img_size)
+
+    # Determine sizes for training and validation datasets
+    train_size = len(train_dataset) if not train_size else train_size
+    val_size = len(val_dataset) if not val_size else val_size
+
+    # Generate list of indices
+    train_indices = list(range(len(train_dataset)))
+    val_indices = list(range(len(val_dataset)))
+
+    # Create samplers for each split
+    train_sampler = SubsetRandomSampler(train_indices[:train_size])
+    val_sampler = SubsetRandomSampler(val_indices[:val_size])
+
+    # Create data loaders using samplers
+    train_loader = DataLoader(train_dataset[:50], batch_size=batchsize, sampler=train_sampler, num_workers=4, pin_memory=True, drop_last=True)
+    # train_loader = DataLoader(train_dataset, batch_size=batchsize, sampler=train_sampler, num_workers=4, pin_memory=True, drop_last=True)
+    val_loader = DataLoader(val_dataset, batch_size=batchsize, sampler=val_sampler, num_workers=4, pin_memory=True, drop_last=True)
+
+    return train_loader, val_loader
+
+import matplotlib.pyplot as plt
+import torch
+import numpy as np
 
 def visualize_flair_and_masks(data_loader, num_samples=3):
     """
@@ -48,6 +164,9 @@ def visualize_flair_and_masks(data_loader, num_samples=3):
         for j in range(min(num_samples, flair_images.size(0))):
             flair_image = flair_images[j].cpu().numpy()  # Convert to numpy for plotting
             mask = masks[j].squeeze(1).cpu().numpy()  # Remove the singleton dimension (1) for masks
+
+            # print(f"Sample {j + 1} - FLAIR Image Shape: {flair_image.shape}")
+            # print(f"Sample {j + 1} - Mask Shape: {mask.shape}")
 
             # Plot the flair image and masks
             fig, axes = plt.subplots(1, len(mask) + 1, figsize=(12, 5))
@@ -75,6 +194,18 @@ current_dir = os.getcwd()  # Get current working directory
 flair_path = os.path.join(current_dir, "data/flair_images")
 ensemble_path = os.path.join(current_dir, "data/ensemble_pred_logit")
 
+# Example usage
+# train_loader, val_loader = get_data_loaders_BRATS(
+#     flair_dir=flair_path,
+#     masks_dir=ensemble_path,
+#     batchsize=2, img_size=(64, 64)
+# )
+
+# if __name__ == "__main__":
+#     data_dir = "/srv/thetis2/il221/BraTS2020_Processed"  # Change this to your dataset location
+#     modality = 'flair'  # Change this to any other modality ('t1', 't2', etc.)
+    
+
 data_dir="/home/data"
 
 train_loader = get_ensemble_all_data_loader(
@@ -94,8 +225,8 @@ val_loader = get_ensemble_all_data_loader(
     mask_type='binary',  # Multi-class mask
     resize=(64, 64)
 )
-
 # visualize_flair_and_masks(train_loader, num_samples=3)
+
 
 
 
@@ -111,6 +242,18 @@ The code below configures and trains a SUPN model for the colour part of the met
 
 ## adapted from paula right now
 
+import os
+import torch
+print(torch.cuda.is_available())
+import torch.optim as optim
+import torch.nn.functional as F
+import torch.nn as nn
+
+# from data_loader import get_data_loaders_BAAPS
+from enum import Enum
+import configparser
+import wandb
+import pdb
 
 wandb.login()
 
@@ -125,26 +268,26 @@ class SupnBRATS:
         self.batch_size = 1  # Batch size set to 1 by default
         self.train_size = 5000  # Training data size set to 5000
         self.val_size = 200  # Validation data size set to 200
-        self.data_loader_func = 'get_ensemble_data_loader'  # Data loader function name (hardcoded)
+        self.data_loader_func = 'get_data_loaders_BRATS'  # Data loader function name (hardcoded)
 
         # Model settings
         self.local_connection_dist = [1]  # Local connection distance (hardcoded)
-        self.num_levels = 5  # Number of levels in the model
-        self.num_scales = 2  # Number of scales in the model
+        self.num_levels = 3  # Number of levels in the model
+        self.num_scales = 1  # Number of scales in the model
         self.num_pred_scales = 1  # Number of prediction scales
         self.dropout_rate = 0.0  # Dropout rate (no dropout)
-        self.weight_decay = 0.01  # Weight decay set to 0 (no regularization)
+        self.weight_decay = 0.0  # Weight decay set to 0 (no regularization)
         self.use_bias = False  # Do not use bias by default
         self.use_3D = False  # 3D operations are disabled by default
-        self.max_ch = 256  # Maximum number of channels in the model
+        self.max_ch = 128  # Maximum number of channels in the model
         self.num_init_features = 32  # Number of initial features in the model
         # log diagonals needs to be 1 if 1 channel (mask 1,2,64,64 problem was caused by num_log_diag=2)
         self.num_log_diags = 1  # Number of log diagonals
         self.freeze_mean_decoder = True  # Freeze the mean decoder by default
 
         # File paths for saving and loading models
-        self.supn_model_load_path = 'checkpoints_logit_notransform_test1/supn_model/colour1_lr0.0001_paramsnomean.pth'  # Path to load model
-        self.supn_model_save_path = 'checkpoints_logit_notransform_test1/supn_model_ensebmle'  # Path to save the model
+        self.supn_model_load_path = 'check/supn_model/colour1_lr0.0001_paramsnomean.pth'  # Path to load model
+        self.supn_model_save_path = 'check/supn_model_ensebmle'  # Path to save the model
 
         # Optimizer settings
         self.optimizer_type = 'AdamW'  # Optimizer type set to AdamW
@@ -170,28 +313,28 @@ class SupnBRATS:
                 'batch_size': 1,
                 'learning_rate': 1e-5,
                 'parameters': 'nomean',
-                'num_epochs': 5, #10
+                'num_epochs': 2, #10
                 'loss_type': 'log_likelihood_loss'
             },
             {
                 'batch_size': 1,
                 'learning_rate': 1e-5,
                 'parameters': 'dec',
-                'num_epochs': 2, # 5
+                'num_epochs': 1, # 5
                 'loss_type': 'log_likelihood_loss'
             },
             {
                 'batch_size': 1,
                 'learning_rate': 1e-5,
                 'parameters': 'chol',
-                'num_epochs': 2, # 5
+                'num_epochs': 1, # 5
                 'loss_type': 'log_likelihood_loss'
             },
             {
                 'batch_size': 1,
                 'learning_rate': 1e-6,
                 'parameters': 'chol',
-                'num_epochs': 2, # 5
+                'num_epochs': 1, # 5
                 'loss_type': 'log_likelihood_loss'
             }
         ]
@@ -237,7 +380,7 @@ class SupnBRATS:
 
         self.train_dataloader = get_ensemble_data_loader(
             data_dir=data_dir,
-            batch_size=1,
+            batch_size=8,
             split="train",
             modality='flair',  # Load only selected modalities
             mask_type='binary',  # Multi-class mask
@@ -246,7 +389,7 @@ class SupnBRATS:
 
         self.val_dataloader = get_ensemble_data_loader(
             data_dir=data_dir,
-            batch_size=1,
+            batch_size=8,
             split="val",
             modality='flair',  # Load only selected modalities
             mask_type='binary',  # Multi-class mask
@@ -315,7 +458,6 @@ class SupnBRATS:
         # print(f"supn_data.mean squeeze shape: {supn_data.mean.squeeze(0).shape}")
         # print(f"target shape: {target.shape}")
         mse_loss = mse_loss_fn(supn_data.supn_data.mean.squeeze(0), target.to(self.device))
-
         # mse_loss = mse_loss * weighting_factor
 
         # trying out hybrid loss
@@ -350,12 +492,8 @@ class SupnBRATS:
 
         for step, batch in enumerate(self.train_dataloader):
             loss = self.run_batch(batch, loss_type)[loss_type]
-            print(f"loss before norm {loss.item()}")
             loss = loss / gradient_accumulation_steps  #Normalize loss
-            print(f"loss after norm {loss.item()}")
             loss.backward()
-
-            print(f"loss item {loss.item()}")
 
             accumulated_loss += loss.item()  #logging
 
@@ -363,21 +501,13 @@ class SupnBRATS:
 
 
             if (step + 1) % gradient_accumulation_steps == 0:
-                torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
-
-                for name, param in self.model.named_parameters():
-                    if param.grad is not None:
-                        grad_norm = param.grad.data.norm(2)
-                        if not torch.isfinite(grad_norm):
-                            print(f"Non-finite gradient detected for {name}!")
-                            print(param.grad)
-
+                # torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
 
                 self.optimizer.step()
                 self.optimizer.zero_grad()
                 #print('accumulated',accumulated_loss)
 
-                print(f"Loss accumulated {accumulated_loss}")
+
 
                 if self.log_wandb:
                     wandb.log({
@@ -398,7 +528,6 @@ class SupnBRATS:
 
         flair_images = batch["modality_data"]  # Flair images for the batch
         masks = batch["selected_pred"]  # Masks are the ensemble predictions (e.g., 3 masks per flair image)
-        masks = masks.permute(1, 0, 2, 3)
 
         # print(f"Flair images shape: {flair_images.shape}")
         # print(f"Masks shape: {masks.shape}")
@@ -408,32 +537,19 @@ class SupnBRATS:
             flair_image = flair_image.unsqueeze(1)  # Add channel dimension if it's grayscale
             # print(f"Masks shape: {masks.shape}")
 
+            masks = masks.permute(1, 0, 2, 3)
             # print(f"Flair image shape: {flair_image.shape}")
             # print(f"Flair image unsqueeze shape: {flair_image.unsqueeze(0).shape}")
             # print(f"Masks shape: {masks.shape}")
-            # print(idx)
 
             for mask_set in masks:  # Loop through each set of masks for this particular flair image
-                # print(f"Masks set shape: {mask_set.shape}")
-
                 mask = mask_set[idx].to(self.device)  # Get the corresponding mask for this flair image
-                # mask = (mask > 0.5).float()
+                mask = (mask > 0.5).float()
 
                 mask = mask.unsqueeze(0)
                 # print(f"Masks min max: {mask.min()} {mask.max()}")
                 # Run the model on the flair image
-
-
-
                 supn_outputs = self.run_model(flair_image)  # Generate model output for this flair image
-
-                                
-                if torch.isnan(supn_outputs[0].supn_data.mean.squeeze(0)).any():
-                    print("NaN detected in input tensors!")
-                    print(f"Flair image: {flair_image}")
-                    print(f"Mask: {mask}")
-                if torch.isinf(flair_image).any():
-                    print("flair nan detected in input tensors!")
 
                 # Calculate the loss between the model output and the mask
                 only_mean = loss_type != 'log_likelihood_loss'
@@ -509,7 +625,7 @@ class SupnBRATS:
                 self.save_model(stage_name)
     
     def test(self):
-        checkpoint_path = 'checkpoints_logit_notransform_test/supn_model_ensebmle/brats5_lr1e-06_paramschol.pth'
+        checkpoint_path = 'check/supn_model_ensebmle/brats5_lr1e-06_paramschol.pth'
         # 'checkpoints/supn_model/brats1_lr0.0001_paramsnomean.pth'
         self.load_model(checkpoint_path)
         self.model.eval()
@@ -585,12 +701,22 @@ class SupnBRATS:
                     image_path = os.path.join(output_folder, f"flair_mask_predicted_mean_ensemb_{idx}.png")
                     plt.savefig(image_path, bbox_inches='tight', pad_inches=0.1)
 
+                    # Optional: Close the plot to free memory
                     plt.close()
+
+                    print(idx)
+
                     print(f"Combined image saved to {image_path}")
 
     # plt.use('Agg')
     def sample_validate_colour(self, nr_of_samples=10, log_wandb=False, train_set=False):
-        checkpoint_path = 'checkpoints_logit_notransform_test/supn_model_ensebmle/brats5_lr1e-06_paramschol.pth'
+        import matplotlib.pyplot as plt
+        from PIL import Image
+        import torch
+
+                # perceptual_model = SupnBRATS()
+        # print('loadeed model')
+        checkpoint_path = 'check/supn_model_ensebmle/brats5_lr1e-06_paramschol.pth'
         # 'checkpoints/supn_model/brats1_lr0.0001_paramsnomean.pth'
         self.load_model(checkpoint_path)
         self.model.eval()
@@ -622,13 +748,19 @@ class SupnBRATS:
 
                     # mean = (mean > 0.5).float()  # Convert probabilities to binary mask
 
+
                     flair_image = flair_images  # (channels, height, width)
+
+
+
 
                     print(flair_image.size)
                     plt.figure(figsize=(6, 6))
                     plt.imshow(flair_image[0], cmap='gray') 
                     plt.axis('off')
                     plt.savefig('original_image.png')
+
+
 
 
                     # img1_tensor, c = preprocess_image(image, size=perceptual_model.image_size)
@@ -664,9 +796,14 @@ class SupnBRATS:
                     fig1, axes = plt.subplots(2, 2, figsize=(10, 10))
                     vmin, vmax = -1, 1  # Set consistent color scaling limits
                     # mean = supn_dist.mean.detach().cpu()[:,0,:,:]
-                    axes[0, 0].imshow(flair_image.squeeze(), cmap='gray')
+                    print(mean.shape,mean.min().item(),mean.max().item())
+                    #print(image.min().item())
+                    axes[0, 0].imshow(flair_image[0].squeeze(), cmap='gray')
                     axes[0, 0].set_title('Original Image')
                     axes[0, 0].axis('off')
+
+                    # print(supn_dist.mean.detach().cpu().squeeze().shape)
+                    # print(supn_dist.mean.detach().cpu().squeeze()[0].shape)
 
                     # mean  = torch.sigmoid(supn_dist.mean)
 
