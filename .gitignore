@@ -6,6 +6,23 @@ __pycache__/
 # C extensions
 *.so
 
+# Ignore specific folders
+logs/
+data/
+pretrained_models/
+checkpoints/
+output_images/
+wandb/
+mapping/
+notebooks/ensemble_models
+supn_base/
+
+# ignore images and models
+*.png
+*.jpg
+*.jpeg
+*.pth
+
 # Distribution / packaging
 .Python
 build/
