@@ -1,114 +1,3 @@
-# import os
-# import numpy as np
-# import torch
-# from other_data_loaders import get_data_loader
-# from u_net import UNet2D
-# # from data_loader_test import get_data_loader  # Update if yours is named differently
-
-# def save_predictions(models, data_loader, split='train', base_output_dir='/srv/thetis2/il221/BraTS2020_Processed'):
-#     """
-#     Save ensemble logits (pre-sigmoid) for each sample as a .pt file:
-#     /<base_output_dir>/<split>/ensemble_pred_logit/<patient>_slice_<id>.pt
-#     """
-
-#     output_dir = os.path.join(base_output_dir, split, 'ensemble_pred_logit')
-#     os.makedirs(output_dir, exist_ok=True)
-
-#     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-#     images_saved = 0
-
-#     with torch.no_grad():
-#         for batch_idx, (images, masks, patient_ids) in enumerate(data_loader):
-#             images = images.to(device).unsqueeze(1)  # [B, 1, H, W]
-
-#             batch_size = images.shape[0]
-
-#             for i in range(batch_size):
-#                 ensemble_logits = []
-
-#                 for model in models:
-#                     outputs = model(images)  # [B, 1, H, W]
-#                     logits = outputs[i, 0, :, :].cpu()  # no sigmoid, shape: [H, W]
-#                     ensemble_logits.append(logits)
-
-#                 # Stack across ensemble dimension: [8, H, W]
-#                 stacked_logits = torch.stack(ensemble_logits)
-
-#                 # Create save path
-#                 patient_id = patient_ids[i] if isinstance(patient_ids, list) else f"sample_{images_saved}"
-#                 save_path = os.path.join(output_dir, f"{patient_id}.npy")
-
-#                 np.save(save_path, stacked_logits.numpy().astype(np.float32))
-#                 print(f"[{split}] Saved: {save_path}")
-#                 images_saved += 1
-
-
-# device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-# # Define model checkpoint paths
-# model_paths = [
-#     'ensemble_models/unet_model_1.pth',
-#     'ensemble_models/unet_model_2.pth',
-#     'ensemble_models/unet_model_3.pth',
-#     'ensemble_models/unet_model_4.pth',
-#     'ensemble_models/unet_model_5.pth',
-#     'ensemble_models/unet_model_6.pth',
-#     'ensemble_models/unet_model_7.pth',
-#     'ensemble_models/unet_model_8.pth'
-# ]
-
-# # Load models from checkpoint paths
-# def load_model(model_path):
-#     model = UNet2D(in_channels=1, out_channels=1).to(device)
-#     state_dict = torch.load(model_path, map_location=device)
-#     model.load_state_dict(state_dict)
-#     model.eval()
-#     return model
-
-# models = [load_model(path) for path in model_paths]
-
-# # Load data loaders
-# data_dir = "/srv/thetis2/il221/BraTS2020_Processed"
-
-# train_loader = get_data_loader(
-#     data_dir=data_dir,
-#     batch_size=8,
-#     split="train",
-#     modality='flair',
-#     mask_type='binary',
-#     resize=(64, 64)
-# )
-
-# val_loader = get_data_loader(
-#     data_dir=data_dir,
-#     batch_size=8,
-#     split="val",
-#     modality='flair',
-#     mask_type='binary',
-#     resize=(64, 64)
-# )
-
-# test_loader = get_data_loader(
-#     data_dir=data_dir,
-#     batch_size=8,
-#     split="test",
-#     modality='flair',
-#     mask_type='binary',
-#     resize=(64, 64)
-# )
-
-# # Save ensemble logits for each split
-# save_predictions(models, train_loader, split='train')
-# save_predictions(models, val_loader, split='val')
-# save_predictions(models, test_loader, split='test')
-
-# logits = torch.load('/home/data/train/ensemble_pred/BraTS20_Training_274_slice_53.pt')
-
-# print(logits.shape)       # should be [8, 64, 64]
-# print(logits.min(), logits.max())  # should be ~[-10, 10] (not clipped)
-
-
-
 import os
 import numpy as np
 import torch
@@ -141,13 +30,13 @@ class BraTSFlairOnlyDataset(Dataset):
 
         flair = torch.tensor(flair.copy(), dtype=torch.float32)
 
-        return flair, None, patient  # mask is None, just a placeholder
-
+        dummy_mask = torch.zeros_like(flair)
+        return flair, dummy_mask, patient
 
 # ----------------------------
 # Ensemble prediction saver
 # ----------------------------
-def save_predictions(models, data_loader, split='train', base_output_dir='/srv/thetis2/il221/BraTS2020_Processed'):
+def save_predictions(models, data_loader, split='train', base_output_dir='/home/data'):
     output_dir = os.path.join(base_output_dir, split, 'ensemble_pred_logit')
     os.makedirs(output_dir, exist_ok=True)
 
@@ -200,26 +89,33 @@ def get_flair_only_loader(data_dir, split, batch_size=8, resize=(64, 64)):
     dataset = BraTSFlairOnlyDataset(data_dir=data_dir, split=split, resize=resize)
     return DataLoader(dataset, batch_size=batch_size, shuffle=False)
 
-data_dir = "/srv/thetis2/il221/BraTS2020_Processed"
+# data_dir = "/home/data"
 
-train_loader = get_flair_only_loader(data_dir, split='train')
-val_loader   = get_flair_only_loader(data_dir, split='val')
-test_loader  = get_flair_only_loader(data_dir, split='test')
+# train_loader = get_flair_only_loader(data_dir, split='train')
+# val_loader   = get_flair_only_loader(data_dir, split='val')
+# test_loader  = get_flair_only_loader(data_dir, split='test')
 
 
 # ----------------------------
 # Save ensemble predictions
 # ----------------------------
-save_predictions(models, train_loader, split='train')
-save_predictions(models, val_loader, split='val')
-save_predictions(models, test_loader, split='test')
+
+# dont want to rerun this right now 
+
+# save_predictions(models, train_loader, split='train')
+# save_predictions(models, val_loader, split='val')
+# save_predictions(models, test_loader, split='test')
 
 
 # ----------------------------
 # Load and inspect one output
 # ----------------------------
-logits = np.load('/srv/thetis2/il221/BraTS2020_Processed/train/ensemble_pred/BraTS20_Training_274_slice_53.npy')
 
-print(logits.shape)       # should be [8, 64, 64]
-print(logits.min(), logits.max())  # should be ~[-10, 10]
+# data_dir="/home/data"
+
+# logits = np.load('/home/data/train/ensemble_pred_logit/BraTS20_Training_274_slice_53.npy')
+# logits = np.load('/home/data/test/ensemble_pred_logit/BraTS20_Training_357_slice_99.npy')
+
+# print(logits.shape)       # should be [8, 64, 64]
+# print(logits.min(), logits.max())  # should be ~[-10, 10]
 

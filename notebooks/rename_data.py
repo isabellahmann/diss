@@ -1,3 +1,5 @@
+# script to rename the BraTS2020 training data files
+
 import os
 
 path = "/srv/thetis2/il221/BraTS2020_TrainingData/MICCAI_BraTS2020_TrainingData/"

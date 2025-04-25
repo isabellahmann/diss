@@ -1,103 +1,105 @@
-# copied for the moment
-
-from torchvision import transforms
+import os
+import time
 import torch
-import torch.nn as nn
-import numpy as np
-import matplotlib.pyplot as plt 
-import torchvision
-import matplotlib
 import wandb
+import matplotlib.pyplot as plt
 
-import torch.nn.functional as F
-from test_copied_refactoring import SupnBRATS
-from supn_base.supn_distribution import SUPN
+def sample_model(trainer, nr_of_samples=10, log_wandb=False, train_set=False):
+    """
+    Samples predictions from a trained SUPN model, visualizes them, and optionally logs to Weights & Biases.
 
-matplotlib.use('Agg')
-def sample_validate_colour(image_path, model=SupnBRATS(), nr_of_samples=10, log_wandb=False, train_set=False):
-    import matplotlib.pyplot as plt
-    from PIL import Image
-    import torch
+    This function performs inference using the `trainer` object's trained model. For each image in the 
+    training dataset, it generates a mean prediction and multiple stochastic samples from the SUPN distribution. 
+    It visualizes the original image, the predicted mean, the residual between a sample and the mean, and the 
+    final sampled mask. The result can be shown, saved locally, and/or logged to WandB.
 
+    Parameters:
+    ----------
+    trainer : SupnBRATS
+        The trainer object that contains the model, dataloader, and configuration parameters.
+    
+    nr_of_samples : int, optional (default=10)
+        Number of stochastic samples to draw from the model's predictive distribution.
 
-    # def normalize(image_tensor):
-    #         """Normalize the image tensor."""
-    #         normalize = transforms.Normalize(mean=(0.5,), std=(0.5,))
-    #         return normalize(image_tensor)
+    log_wandb : bool, optional (default=False)
+        If True, logs the sampled images to Weights & Biases (wandb) for visualization and tracking.
 
-    image = Image.open(image_path).convert("L")
-    image = transforms.ToTensor()(image)
+    train_set : bool, optional (default=False)
+        If True, logs the visualizations under 'Train_Recon' in wandb; otherwise logs as 'Test_Recon'.
 
-    image = image.unsqueeze(0)
+    Returns:
+    -------
+    None
+        Displays visualizations, saves them as .png files, and logs to wandb if enabled.
+    """
+    # Load the pre-trained model from checkpoint
+    checkpoint_path = trainer.supn_model_load_path
+    trainer.load_model(checkpoint_path)
+    trainer.model.eval()  # Set model to evaluation mode
 
-    print(image.size)
-    plt.figure(figsize=(6, 6))
-    plt.imshow(image.squeeze(), cmap="gray")
-    plt.axis('off')
-    plt.savefig('original_image.png')
+    with torch.no_grad():  # Disable gradient computation for inference
+        for batch in trainer.train_dataloader:
+            flair_images = batch["modality_data"]  # Get Flair MRI images
+            masks = batch["selected_pred"]  # Get ensemble masks (ground truth-like)
 
+            for idx, flair_image in enumerate(flair_images):
+                # Prepare input image for the model
+                flair_image = flair_image.unsqueeze(0).to(trainer.device)  # Add batch dimension
+                flair_image = flair_image.unsqueeze(1)  # Add channel dimension for grayscale
 
-    perceptual_model = SupnBRATS()
-    print('loadeed model')
+                # Forward pass through the model
+                supn_outputs = trainer.run_model(flair_image)
+                mean = torch.sigmoid(supn_outputs[0].mean)  # Apply sigmoid to model mean output
 
-    # img1_tensor, c = preprocess_image(image, size=perceptual_model.image_size)
-    # print(img1_tensor.shape,img1_tensor.min().item(),img1_tensor.max().item())
-    # print(c.shape,c.min().item(),c.max().item())
-    # c = normalize(c)
-    model_outputs = perceptual_model.run_model(image)  # Get model outputs
-    supn_list = model_outputs[0]
+                # Just for visualization (grab the original input)
+                flair_image_vis = flair_images
 
-    rows = nr_of_samples  # One row per sample
-    cols = 1  # One column per resolution level
+                # Save the original Flair image (optional step)
+                plt.figure(figsize=(6, 6))
+                plt.imshow(flair_image_vis[0], cmap='gray') 
+                plt.axis('off')
+                plt.savefig('original_image.png')
 
-    plt.figure(figsize=(cols * 3, rows * 3))
+                # Sample from the learned distribution (multiple samples)
+                supn_dist = supn_outputs[0]
+                sample = supn_dist.sample(num_samples=nr_of_samples).squeeze(1)
+                sample_np = sample.detach().cpu().numpy()
 
-    supn_dist = supn_list
+                # Apply sigmoid to convert logits to probabilities (for display)
+                sample = torch.sigmoid(torch.from_numpy(sample_np[0, 0, :, :]))
 
-    # Sample from the distribution
-    sample = supn_dist.sample(num_samples=nr_of_samples).squeeze(1)
-    sample_np = sample.detach().cpu().numpy()
+                # Plot original image, mean, sampled difference, and sampled mask
+                fig1, axes = plt.subplots(2, 2, figsize=(10, 10))
 
-    fig1, axes = plt.subplots(2, 2, figsize=(10, 10))
-    vmin, vmax = -1, 1  # Set consistent color scaling limits
-    mean = supn_dist.mean.detach().cpu()[:,0,:,:]
-    print(mean.shape,mean.min().item(),mean.max().item())
-    #print(image.min().item())
-    axes[0, 0].imshow(image.squeeze(), cmap='gray')
-    axes[0, 0].set_title('Original Image')
-    axes[0, 0].axis('off')
+                # Original Flair image
+                axes[0, 0].imshow(flair_image_vis.squeeze(), cmap='gray')
+                axes[0, 0].set_title('Original Image')
+                axes[0, 0].axis('off')
 
-    print(supn_dist.mean.detach().cpu().squeeze().shape)
-    print(supn_dist.mean.detach().cpu().squeeze()[0].shape)
+                # Predicted Mean output from the model
+                axes[0, 1].imshow(mean.detach().cpu().squeeze(), cmap='gray')
+                axes[0, 1].set_title('Mean Reconstruction')
+                axes[0, 1].axis('off')
 
-    mean  = torch.sigmoid(supn_dist.mean)
+                # Residual sample without adding mean (uncertainty part)
+                axes[1, 0].imshow(-mean.detach().cpu().squeeze() + sample.detach().cpu().squeeze(), cmap='gray')
+                axes[1, 0].set_title('Sampled Image (No Mean)')
+                axes[1, 0].axis('off')
 
+                # Final Sample: mean + stochastic variation
+                axes[1, 1].imshow(sample.detach().cpu().squeeze(), cmap='gray')
+                axes[1, 1].set_title('Mean + Sample')
+                axes[1, 1].axis('off')
 
-    # axes[0, 1].imshow(supn_dist.mean.detach().cpu().squeeze()[0], cmap='gray')
-    axes[0, 1].imshow(mean.detach().cpu().squeeze(), cmap='gray')
-    axes[0, 1].set_title('Mean Reconstruction')
-    axes[0, 1].axis('off')
+                plt.tight_layout()
+                plt.show()  # Display the grid of images
 
-    # axes[1, 0].imshow(-supn_dist.mean.detach().cpu().squeeze()[0] + sample_np[0, 0, :, :], cmap='gray')
-    axes[1, 0].imshow(-mean.detach().cpu().squeeze() + sample_np[0, 0, :, :], cmap='gray')
-    axes[1, 0].set_title('Sampled Image (No Mean)')
-    axes[1, 0].axis('off')
+                # Optionally log the visualization to Weights & Biases
+                if log_wandb:
+                    image_log = {'Train_Recon' if train_set else 'Test_Recon': wandb.Image(fig1)}
+                    wandb.log(image_log)
 
-    axes[1, 1].imshow(sample[0, 0, :, :].detach().cpu(), cmap='gray')
-    axes[1, 1].set_title('Mean + Sample')
-    axes[1, 1].axis('off')
-
-    plt.tight_layout()
-    plt.show()
-
-    if log_wandb:
-        if train_set:
-            wandb.log({'Train_Recon': wandb.Image(fig1)})
-        else:
-            wandb.log({'Test_Recon': wandb.Image(fig1)})
-
-    plt.tight_layout()
-    plt.savefig('colour_sample.png')
-
-
-sample_validate_colour("data/flair_images/patient_0_4.png")
+                # Save the composite image locally with a timestamp and patient ID
+                timestamp = int(time.time())
+                patient_id = batch["patient"][idx] if "patient" in batch else f"idx_{idx}"
+                plt.savefig(f'drawn_sample_logit_{patient_id}_{timestamp}.png')

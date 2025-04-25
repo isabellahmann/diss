@@ -1,3 +1,5 @@
+# Written by Henry Williams
+
 from typing import Optional, List, Tuple
 
 import torch

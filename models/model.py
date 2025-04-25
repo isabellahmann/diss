@@ -1,12 +1,4 @@
-# Adapted code from Ivor Simpson, University of Sussex (i.simpson@sussex.ac.uk),
-# with the following key changes and adjustments:
-# -> The model now infers SUPN (Sparse Uncertainty Prediction Network) objects at multiple intermediate layers, 
-#    not just the last layer, with adaptive control via the `nr_of_prediction_scales`.
-# -> Outputs the SUPN objects as a list of layers, each with corresponding scalings.
-# -> For each SUPN object, the `nr_of_connections` (i.e., local connection distances) is provided, 
-#    and it must match the length of the scaling levels (`nr_of_scaling`).
-
-## currently adapted from Paula's code
+# Adapted code from Paula Seidler
 
 import sys
 sys.path.append('../')
@@ -19,9 +11,6 @@ from models.supn_blocks import ResnetBlock, ResNetType
 
 from supn_base.sparse_precision_cholesky import get_num_off_diag_weights
 from supn_base.cholespy_solver import get_num_off_diag_weights
-from supn_base.supn_data import SUPNData
-from supn_base.supn_distribution import SUPN
-
 
 class SupnDecoderType(Enum):
     ORTHONORMAL_BASIS = 0
@@ -262,10 +251,7 @@ class SUPNDecoderDirect(SUPNDecoderBase):
         """
         Perform decoding, and here approximate supn parameters from second layer(after bottleneck).
         """
-        final_res = decodings[-1].shape[-2:]  # Resolution of the final decoding layer
         results = []
-
-
 
         # Start from the second element (decodings[1]) onwards
         for idx, (ip_encoding, pre_conv, log_diag_conv, off_diag_conv) in enumerate(
@@ -402,7 +388,6 @@ class SUPNEncoderDecoder(nn.Module):
         self.mean_decoder = MeanDecoder(min(num_init_features, max_ch),num_log_diags = num_log_diags, max_ch=max_ch,
                                         num_scales=self.num_prediction_scales, use_bias=use_bias)
         
-        
 
     def forward(self, x):
         """
@@ -424,9 +409,9 @@ class SUPNEncoderDecoder(nn.Module):
         i = 0
         for mean, supn in zip(mean_decodings,supn_decodings):
             log_diag, off_diag, cross_ch = supn
-            ## currently I dont have access to the supn cholespy so solver does not work
             results.append(torch.distributions.SUPN(SUPNData(mean = mean, log_diag=log_diag, off_diag=off_diag, cross_ch=cross_ch,
                                                  local_connection_dist=self.local_connection_dist[i])))
+            ## currently I dont have access to the supn cholespy so solver does not work
             # results.append(SUPNData(mean = mean, log_diag=log_diag, off_diag=off_diag, cross_ch=cross_ch,
             #                                      local_connection_dist=self.local_connection_dist[i]))
             i += 1

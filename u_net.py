@@ -3,11 +3,8 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.nn import BCEWithLogitsLoss
 import os
-import wandb  # Import wandb for logging
-from data_loader_test import get_data_loader
-
-
-
+import wandb 
+from notebooks.other_data_loaders import get_data_loader
 
 class UNet2D(nn.Module):
     def __init__(self, in_channels=1, out_channels=1, init_features=32):
@@ -158,40 +155,31 @@ def train_ensemble_of_unets(ensemble_size, train_loader, val_loader, num_epochs=
         train_unet_model(model, train_loader, val_loader, optimizer, criterion, num_epochs=num_epochs, patience=patience, model_save_path=model_save_path)
 
 
+wandb.init(project="braTS-unet") 
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-# # Initialize W&B (ensure you have logged into W&B using wandb.login() or W&B API key is set)
-# wandb.init(project="braTS-unet")  # Specify your project name and username
+ensemble_size = 8
+criterion = BCEWithLogitsLoss()    
 
-# # Check if GPU is available
-# device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+# load data
+train_loader = get_data_loader(
+    batch_size=8,
+    split="train",
+    modality='flair',  # Load only selected modalities
+    mask_type='binary',  # Multi-class mask
+    resize=(64, 64)
+)
 
+val_loader = get_data_loader(
+    batch_size=8,
+    split="val",
+    modality='flair',  # Load only selected modalities
+    mask_type='binary',  # Multi-class mask
+    resize=(64, 64)
+)
 
-# # Number of models in the ensemble
-# ensemble_size = 1  # You can modify this number based on the desired size of the ensemble
+train_ensemble_of_unets(ensemble_size=1, train_loader=train_loader, val_loader=val_loader)
 
-# # Model, optimizer, and loss function
-# criterion = BCEWithLogitsLoss()    
-
-# # Training and Validation DataLoader
-# train_loader = get_data_loader(
-#     batch_size=8,
-#     split="train",
-#     modality='flair',  # Load only selected modalities
-#     mask_type='binary',  # Multi-class mask
-#     resize=(64, 64)
-# )
-
-# val_loader = get_data_loader(
-#     batch_size=8,
-#     split="val",
-#     modality='flair',  # Load only selected modalities
-#     mask_type='binary',  # Multi-class mask
-#     resize=(64, 64)
-# )
-
-# # Train an ensemble of 8 U-Net models with W&B logging
-# train_ensemble_of_unets(ensemble_size=1, train_loader=train_loader, val_loader=val_loader)
-
-# for images, masks in train_loader:
-    # print(images.shape)  # This will print the shape of the batch (e.g., [8, 1, 128, 128])
-    # images, masks = images.to(device), masks.to(device)  # Move to GPU
+for images, masks in train_loader:
+    print(images.shape)  
+    images, masks = images.to(device), masks.to(device) 

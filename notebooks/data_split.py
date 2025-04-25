@@ -1,3 +1,5 @@
+# script for splitting the BraTS2020 dataset into train, validation, and test sets
+
 import os
 import numpy as np
 import pandas as pd
@@ -69,3 +71,20 @@ for patient_folder in os.listdir(data_dir):
             np.save(slice_path, selected_slices[:, :, i])  # Save single slice
 
 print("Finished saving files!")
+
+import pandas as pd
+from sklearn.model_selection import train_test_split
+
+# import pandas as pd
+
+# # Load the CSV files
+# train_data = pd.read_csv("train_mapping.csv")
+# val_data = pd.read_csv("val_mapping.csv")
+# test_data = pd.read_csv("test_mapping.csv")
+
+
+# print("Train distribution (counts):\n", train_data["Grade"].value_counts())
+# print("Validation distribution (counts):\n", val_data["Grade"].value_counts())
+# print("Test distribution (counts):\n", test_data["Grade"].value_counts())
+
+

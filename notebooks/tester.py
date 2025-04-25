@@ -1,9 +1,9 @@
 import torch
 import matplotlib.pyplot as plt
 import numpy as np
-from data_loader_test import get_data_loader
+from notebooks.data_loader import get_data_loader
 from u_net import UNet2D
-from data_loader_test import get_data_loader
+from notebooks.data_loader import get_data_loader
 import os
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -46,11 +46,11 @@ val_loader = get_data_loader(
     resize=(64, 64)
 )
 
-
 # Create a directory to save predictions
 output_dir = 'predictions'
 if not os.path.exists(output_dir):
     os.makedirs(output_dir)
+
 # Save predictions for multiple models
 def save_predictions(models, val_loader, num_images=5, output_dir='predictions'):
     images_saved = 0

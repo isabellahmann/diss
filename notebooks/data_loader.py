@@ -1,205 +1,245 @@
-import torch
-import glob
 import os
+import random
 import numpy as np
-import nibabel as nib
-import albumentations as A
-from albumentations.pytorch import ToTensorV2
-from torch.utils.data import Dataset, DataLoader
+import torch
+from torch.utils.data import Dataset, DataLoader, SubsetRandomSampler
+import matplotlib.pyplot as plt
+from skimage import exposure
+from torchvision import transforms
+from scipy.ndimage import rotate  # For arbitrary rotations
+from scipy.ndimage import gaussian_filter, map_coordinates
+import cv2
+import numpy as np
+from scipy.ndimage import gaussian_filter, map_coordinates
+import random
 
-MODALITIES = ["flair", "t1", "t2", "t1ce"]
-
-LABEL_MAP = {
-    0: 0,  # Background
-    1: 1,  # NCR (Necrotic and Non-Enhancing Tumor Core)
-    2: 2,  # ED (Peritumoral Edema)
-    4: 3   # ET (Enhancing Tumor)
-}
-
-class BraTSDataset(Dataset):
-    def __init__(self, data_dir, split="train", image_size=(64, 64), normalize=True, 
-                 modalities=None, num_classes=1, return_slices=False):
+class BraTSEnsembleAllDataset(Dataset):
+    def __init__(self, data_dir, split='train', modality='flair', mask_type='binary', transform=None, resize=None):
         """
-        Args:
-            data_dir (str): Path to dataset (should contain 'train', 'val', 'test' subfolders).
-            split (str): 'train', 'val', or 'test'.
-            image_size (tuple): Target image size for resizing.
-            normalize (bool): Whether to normalize images.
-            modalities (list): Which MRI modalities to use (default: all).
-            num_classes (int): Number of segmentation classes (1 for whole tumor, 4 for all tumor subtypes).
-            return_slices (bool): If True, returns 2D slices (from slice 30 to -30), else returns full 3D volumes.
+        PyTorch Dataset for BraTS 2020 dataset.
+        
+        :param data_dir: Root directory containing 'train', 'val', 'test' subdirectories
+        :param split: 'train', 'val', or 'test'
+        :param modality: 'flair', 't1', 't2', 't1ce', etc.
+        :param mask_type: 'binary' (tumor vs no tumor) or 'multiclass' (separate tumor classes)
+        :param transform: Torchvision transforms for augmentation
         """
-        self.data_dir = os.path.join(data_dir)
-        self.image_size = image_size
-        self.normalize = normalize
-        self.split = split
-        self.modalities = modalities if modalities else MODALITIES
-        self.num_classes = num_classes
-        self.return_slices = return_slices  # If True, return 2D slices
-
-        # Get patient folder paths
-        self.patients = sorted(glob.glob(os.path.join(self.data_dir, "BraTS20_Training_*")))
-
-        # Define augmentations (for 2D slices)
-        self.train_transform = A.Compose([
-            A.HorizontalFlip(p=0.5),
-            # A.RandomRotate90(p=0.5),
-            # A.Resize(height=240, width=240),  # Ensure consistent size after rotation
-            A.ElasticTransform(alpha=1, sigma=50, p=0.3),
-            A.Normalize(mean=0, std=1) if normalize else A.NoOp(),
-            ToTensorV2()
-        ])
-
-        self.val_transform = A.Compose([
-            A.Normalize(mean=0, std=1) if normalize else A.NoOp(),
-            ToTensorV2()
-        ])
+        self.data_dir = os.path.join(data_dir, split, modality)
+        self.ensemble_pred_dir = os.path.join(data_dir, split, 'ensemble_pred_logit')  # Directory for ensemble predictions
+        self.modality = modality
+        self.mask_type = mask_type
+        self.transform = transform
+        self.resize = resize
+        self.patients = sorted(os.listdir(self.data_dir))
+        
+        # Ensure that the split folder exists
+        if not self.patients:
+            raise ValueError(f"No data found in {self.data_dir}")
 
     def __len__(self):
         return len(self.patients)
 
     def __getitem__(self, idx):
-        patient_path = self.patients[idx]
+        patient = self.patients[idx]
+        patient_path = os.path.join(self.data_dir, patient)
+        ensemble_pred_path = os.path.join(self.ensemble_pred_dir, patient)  # Path to the ensemble predictions
         
-        # Load selected MRI modalities
-        image_channels = []
-        for modality in self.modalities:
-            modality_path = os.path.join(patient_path, f"{os.path.basename(patient_path)}_{modality}.nii")
-            modality_img = nib.load(modality_path).get_fdata()
-            image_channels.append(modality_img)
+        # Load modality (e.g., flair, t1, t2, etc.)
+        modality_data = np.load(os.path.join(patient_path)).astype(np.float32)
+        
+        # Load corresponding ensemble prediction (from ensemble_pred directory)
+        ensemble_preds = np.load(os.path.join(ensemble_pred_path)).astype(np.float32)
 
-        # Stack selected modalities into a single tensor (C, H, W, D)
-        image = np.stack(image_channels, axis=0)  # Shape: (C, H, W, D)
+        #gt
+        gt_path = os.path.join(patient_path.replace(self.modality, 'seg'))
+        gt_mask = np.load(gt_path).astype(np.float32)
+        if self.resize:
+            new_h, new_w = self.resize
+            gt_mask = cv2.resize(gt_mask, (new_w, new_h), interpolation=cv2.INTER_NEAREST)
+        gt_mask = torch.tensor(gt_mask.copy(), dtype=torch.float32)
 
-        # Load segmentation mask
-        mask_path = os.path.join(patient_path, f"{os.path.basename(patient_path)}_seg.nii")
-        mask = nib.load(mask_path).get_fdata() if os.path.exists(mask_path) else None
+        # Randomly select one of the ensemble predictions
+        # selected_pred = random.choice(ensemble_preds)  # Choose a random prediction
+        # selected_pred = np.random.choice(ensemble_preds)
+        # random_idx = np.random.randint(0, ensemble_preds.shape[0])  # Pick a random prediction index
+        # selected_pred = ensemble_preds[random_idx]  # Shape: (height, width)
+        selected_pred = ensemble_preds  # Shape: [8, H, W]
 
-        if mask is not None:
-            mask = np.vectorize(LABEL_MAP.get)(mask)  # Convert mask labels
-            if self.num_classes == 1:
-                mask[mask > 0] = 1  # Convert to binary mask
 
-        if self.return_slices:
-            # Return 2D slices (from slice 30 to -30 to remove empty space)
-            image = image[:, :, :, 30:-30]  # Shape: (C, H, W, D')
-            mask = mask[:, :, 30:-30] if mask is not None else None  # Shape: (H, W, D')
 
-            # Convert (C, H, W, D') to a list of (C, H, W) slices
-            image_slices = [image[:, :, :, i] for i in range(image.shape[-1])]
-            mask_slices = [mask[:, :, i] for i in range(mask.shape[-1])] if mask is not None else None
+        # selected_pred = (selected_pred - selected_pred.min()) / (selected_pred.max() - selected_pred.min())
 
-            # Apply augmentations for each slice (training only)
-            # transform = self.train_transform if self.split == "train" else self.val_transform
-            # processed_images = [transform(image=img)["image"] for img in image_slices]
-            # processed_masks = [torch.tensor(mask, dtype=torch.long) for mask in mask_slices] if mask is not None else None
-# Apply augmentations for each slice individually (training only)
-            transform = self.train_transform if self.split == "train" else self.val_transform
+        # print(f"Unique values in selected_pred for {patient}: {np.unique(selected_pred)}")
 
-            # Apply a random transformation to each slice
-            processed_images = [transform(image=img)["image"] for img in image_slices]
-            processed_masks = [torch.tensor(mask, dtype=torch.long) for mask in mask_slices] if mask is not None else None
 
-            return torch.stack(processed_images), torch.stack(processed_masks) if processed_masks is not None else torch.stack(processed_images)
+        # # Process mask based on selected mask type (if applicable)
+        # if self.mask_type == 'binary':
+        #     selected_pred = (selected_pred > 0).astype(np.float32)  # Convert to 0 (background) and 1 (tumor)
+        # elif self.mask_type == 'multiclass':
+        #     selected_pred = selected_pred.astype(np.int32)  # Keep original multi-class mask
+        # else:
+        #     raise ValueError(f"Invalid mask_type '{self.mask_type}'. Choose 'binary' or 'multiclass'.")
+        
 
+        if self.resize:
+            new_h, new_w = self.resize
+            modality_data = cv2.resize(modality_data, (new_w, new_h), interpolation=cv2.INTER_LINEAR)  # Bilinear for images
+            # seg_data = cv2.resize(seg_data, (new_w, new_h), interpolation=cv2.INTER_NEAREST)  # Nearest for masks (preserves labels)
+            selected_pred = cv2.resize(selected_pred, (new_w, new_h), interpolation=cv2.INTER_NEAREST)  # Nearest for masks (preserves labels)
+
+        # Apply on-the-fly transformations if any
+        if self.transform:
+            # modality_data, selected_pred, seg_data = self.transform(modality_data, selected_pred, seg_data)
+            modality_data, selected_pred = self.transform(modality_data, selected_pred)
+            # for pred in ensemble_preds:
+            #     pred = self.transform(pred)
+        
+        # Make sure the arrays are contiguous before converting to tensors
+        modality_data = torch.tensor(modality_data.copy(), dtype=torch.float32)
+        selected_pred = torch.tensor(selected_pred.copy(), dtype=torch.float32)
+        # seg_data = torch.tensor(seg_data.copy(), dtype=torch.float32)
+
+        # return modality_data, selected_pred, patient
+        return {
+            "modality_data": modality_data,
+            "selected_pred": selected_pred,  # shape [N, H, W]
+            "gt_mask": gt_mask,
+            "patient": patient
+        }
+
+
+
+# Custom augmentation class for applying the same transformations to both image and mask
+class RandomVerticalFlip:
+    def __call__(self, img, mask):
+        if random.random() > 0.5:
+            img = np.flip(img, axis=0)
+            # pred = np.flip(pred, axis=0)
+            mask = np.flip(mask, axis=0)
+        return img, mask
+
+
+class RandomRotation:
+    def __init__(self, angle_range=(-15, 15)):
+        self.angle_range = angle_range
+
+    def __call__(self, img, mask):
+        # Randomly choose an angle between the range
+        angle = random.uniform(*self.angle_range)
+        
+        # Rotate the image and mask by the selected angle
+        # Mode 'nearest' avoids boundary artifacts by filling outside pixels with the nearest value
+        img_rotated = rotate(img, angle, reshape=False, mode='nearest', order=1)  # 1 for bilinear interpolation
+        mask_rotated = rotate(mask, angle, reshape=False, mode='nearest', order=0)  # 0 for nearest-neighbor (for segmentation)
+        # pred_rotated = rotate(pred, angle, reshape=False, mode='nearest', order=0)  # 0 for nearest-neighbor (for segmentation)
+
+        return img_rotated, mask_rotated
+
+
+class RandomGammaCorrection:
+    def __init__(self, gamma_range=(0.5, 2.0)):
+        self.gamma_range = gamma_range
+
+    def __call__(self, img, mask):
+        gamma = random.uniform(*self.gamma_range)
+        img = exposure.adjust_gamma(img, gamma)  # Apply gamma correction using skimage's adjust_gamma
+        return img, mask
+    
+class RandomGaussianNoise:
+    def __init__(self, mean=0, std=0.01):
+        self.mean = mean
+        self.std = std
+
+    def __call__(self, img, mask):
+        noise = np.random.normal(self.mean, self.std, img.shape)
+        img = np.clip(img + noise, 0, 1)  # Ensure image remains within [0, 1] range
+        return img, mask
+    
+
+class ElasticDeformation:
+    def __init__(self, alpha=1.0, sigma=20):
+        """
+        Elastic deformation for augmenting images.
+        
+        :param alpha: Magnitude of the displacement field. Higher values lead to more severe deformations.
+        :param sigma: Standard deviation for the Gaussian kernel used to smooth the displacement field.
+        """
+        self.alpha = alpha
+        self.sigma = sigma
+
+    def __call__(self, img, mask):
+        """
+        Apply elastic deformation to both the image and its corresponding mask.
+        
+        :param img: The image to deform (2D).
+        :param mask: The corresponding mask to deform (2D).
+        :return: Deformed image and mask.
+        """
+        random_state = np.random.RandomState(None)
+
+        # Generate random displacement fields
+        shape = img.shape
+        dx = gaussian_filter((random_state.rand(*shape) * 2 - 1), self.sigma, mode="constant", cval=0) * self.alpha
+        dy = gaussian_filter((random_state.rand(*shape) * 2 - 1), self.sigma, mode="constant", cval=0) * self.alpha
+
+        # Create a meshgrid of coordinates
+        x, y = np.meshgrid(np.arange(shape[1]), np.arange(shape[0]))
+
+        # Apply displacement
+        distorted_img = map_coordinates(img, [y + dy, x + dx], order=1, mode='nearest')
+        distorted_mask = map_coordinates(mask, [y + dy, x + dx], order=1, mode='nearest')
+        # distorted_pred = map_coordinates(pred, [y + dy, x + dx], order=1, mode='nearest')
+
+        return distorted_img, distorted_mask
+
+
+# Define normalization transform
+class Normalize:
+    def __init__(self, mean=0.5, std=0.5):
+        self.mean = mean
+        self.std = std
+
+    def __call__(self, img, mask):
+        img_max = img.max()
+        if img_max > 0:
+            img = img / img_max
         else:
-            # Full 3D volume (C, H, W, D)
-            transform = self.train_transform if self.split == "train" else self.val_transform
-            image = transform(image=image)["image"]
-
-            if mask is not None:
-                mask = torch.tensor(mask, dtype=torch.long)  # Convert to tensor
-
-            return image, mask if mask is not None else image
+            img = img
+        img = (img - self.mean) / self.std
+        return img, mask
 
 
-def get_brats_dataloader(data_dir="/srv/thetis2/il221/BraTS2020_TrainingData/MICCAI_BraTS2020_TrainingData/", batch_size=4, split="train", image_size=(240, 240), 
-                         normalize=True, modalities=None, num_classes=1, return_slices=False, num_workers=4):
-    dataset = BraTSDataset(data_dir, split=split, image_size=image_size, normalize=normalize, 
-                           modalities=modalities, num_classes=num_classes, return_slices=return_slices)
+# Create a pipeline of transformations
+class Compose:
+    def __init__(self, transforms):
+        self.transforms = transforms
+
+    def __call__(self, img, mask):
+        for t in self.transforms:
+            img, mask = t(img, mask)
+        return img, mask
     
-    return DataLoader(dataset, batch_size=batch_size, shuffle=(split == "train"), num_workers=num_workers)
 
 
-# Import DataLoader
-train_loader = get_brats_dataloader(
-    batch_size=2,
-    split="train",
-    modalities=["flair"],  # Load only selected modalities
-    num_classes=1,  # Multi-class mask
-    return_slices=True  # Change to False for 3D volumes
-)
+def get_ensemble_all_data_loader(data_dir="/srv/thetis2/il221/BraTS2020_Processed", modality='flair', mask_type='binary', batch_size=8, num_workers=4, split='train', data_size=None, resize=(128, 128)):
 
-# # Fetch a batch from the DataLoader
-# for images, masks in train_loader:
-#     print(f"Images Shape: {images.shape}")  # Expected (B, C, H, W) for 2D, (B, C, H, W, D) for 3D
-#     print(f"Masks Shape: {masks.shape}")    # Same as images
-#     break  # Stop after first batch
+    # Apply normalization
+    normalize = Normalize(mean=0.5, std=0.5)
+    transform = Compose([normalize])
 
+    # Create dataset
+    dataset = BraTSEnsembleAllDataset(data_dir, split=split, modality=modality, mask_type=mask_type, transform=transform, resize=resize)
 
+    # If data_size is specified, randomly sample from the dataset
+    data_size = len(dataset) if not data_size else data_size
 
-import matplotlib.pyplot as plt
-import numpy as np
+    # Generate list of indices
+    train_indices = list(range(len(dataset)))
 
-def show_image_and_mask(image, mask, num_slices=3, save_path=None):
-    """
-    Function to visualize images and masks, and optionally save the figure to a file.
-    
-    Args:
-        image (torch.Tensor): The image tensor to display (shape: [C, H, W]).
-        mask (torch.Tensor): The mask tensor to display (shape: [H, W]).
-        num_slices (int): Number of slices to visualize. Default is 3 slices.
-        save_path (str): Path to save the image. If None, the image will not be saved.
-    """
-    # Select a few slices (for 2D data, you can show individual channels)
-    fig, axes = plt.subplots(num_slices, 2, figsize=(10, 5))
-    
-    # Display image and mask side-by-side for each slice
-    for y in range(num_slices):
-        i = y + 50
-        # For 2D images, we can just display each channel (e.g., flair, t1, etc.)
-        img_slice = image[i, :, :].numpy()  # Access each channel (assuming C, H, W)
-        img_slice = np.squeeze(img_slice)  # Remove unnecessary singleton dimension
-        
-        mask_slice = mask[i, :, :].numpy()  # Extract the slice from the mask (assuming 3D mask)
-        mask_slice = np.squeeze(mask_slice)  # Remove unnecessary singleton dimension
+    # Create samplers for each split
+    sampler = SubsetRandomSampler(train_indices[:data_size])
 
-        # Display image
-        axes[y, 0].imshow(img_slice, cmap='gray')
-        axes[y, 0].set_title(f"Image Channel {i+1}")
-        axes[y, 0].axis('off')  # Hide axes
-        
-        # Display mask
-        axes[y, 1].imshow(mask_slice, cmap='gray')
-        axes[y, 1].set_title(f"Mask Slice {i+1}")
-        axes[y, 1].axis('off')  # Hide axes
+    # Create DataLoader
+    dataloader = DataLoader(dataset, batch_size=batch_size, num_workers=num_workers, drop_last=True, sampler=sampler, pin_memory=True)
 
-    plt.tight_layout()
-    
-    # If save_path is provided, save the figure to that path
-    if save_path:
-        plt.savefig(save_path, bbox_inches='tight')  # Save without extra margins
-    
-    plt.show()
-
-import os
-import matplotlib.pyplot as plt
-
-# Get the directory where the Python file is located
-script_dir = os.path.dirname(os.path.realpath(__file__))  # This will give the directory of the current script
-
-# Specify the filename for the image
-save_filename = "your_image.png"  # Specify the image file name
-
-# Full path to save the image in the same folder as the script
-save_path = os.path.join(script_dir, save_filename)
-
-for images, masks in train_loader:
-    print(f"Images Shape: {images.shape}")  # Expected shape: (B, C, H, W) or (B, C, H, W, D)
-    print(f"Masks Shape: {masks.shape}")    # Expected shape: (B, H, W) or (B, H, W, D)
-    
-    # Assuming images are 2D slices (C, H, W)
-    show_image_and_mask(images[0], masks[0], save_path=save_path)  # Show and save the images and masks
-
-    # break  # Stop after the first batch
-
+    return dataloader
