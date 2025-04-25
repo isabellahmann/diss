@@ -15,6 +15,7 @@ output_images/
 wandb/
 mapping/
 notebooks/ensemble_models
+supn_base/
 
 # ignore images and models
 *.png
